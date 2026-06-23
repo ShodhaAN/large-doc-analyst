@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from backend.ingestion.pdf_loader import load_pdf
 from backend.chunking.chunker import chunk_document
+from backend.embeddings.embedder import embedder
 from backend.config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +19,7 @@ async def ping():
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     """
-    Upload a PDF, extract text, and chunk it.
+    Upload a PDF, extract text, chunk it, and generate embeddings.
     """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(
@@ -42,14 +43,19 @@ async def upload_pdf(file: UploadFile = File(...)):
         overlap=settings.chunk_overlap
     )
 
+    # Generate embeddings
+    embedded_chunks = embedder.embed_chunks(chunks)
+
+    # Show sample embedding (first 5 numbers only)
+    sample_embedding = embedded_chunks[0]["embedding"][:5] if embedded_chunks else []
+
     return {
         "filename": document.filename,
         "total_pages": document.total_pages,
-        "total_characters": document.total_chars,
         "total_chunks": len(chunks),
-        "preview": document.pages[0].text[:300] if document.pages else "",
-        "sample_chunk": chunks[0].text if chunks else "",
-        "message": "PDF uploaded, extracted and chunked successfully!"
+        "embedding_dimension": len(embedded_chunks[0]["embedding"]) if embedded_chunks else 0,
+        "sample_embedding_preview": sample_embedding,
+        "message": "PDF processed and embeddings generated successfully!"
     }
 
 
