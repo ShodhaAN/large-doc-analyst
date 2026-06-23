@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.pyc
+
+# Data (don't upload PDFs or indexes to GitHub)
+data/uploads/
+data/indexes/
+
+# Environment (never push secrets to GitHub!)
+.env
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+desktop.ini
