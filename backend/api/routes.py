@@ -5,6 +5,7 @@ from backend.chunking.chunker import chunk_document
 from backend.embeddings.embedder import embedder
 from backend.vectorstore.faiss_store import faiss_store
 from backend.retrieval.retriever import retriever
+from backend.rag.pipeline import rag_pipeline
 from backend.llm.ollama_client import ollama_client
 from backend.config import settings
 
@@ -26,24 +27,26 @@ async def ollama_status():
     return {
         "ollama_running": available,
         "model": settings.ollama_model,
-        "message": "Ollama is ready!" if available else "Ollama is not running. Run 'ollama serve' in terminal."
+        "message": "Ollama is ready!" if available else "Run 'ollama serve' first!"
     }
 
 
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Upload a PDF and process it completely."""
+    """Upload and process a PDF completely."""
     if not file.filename.endswith(".pdf"):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are allowed!"
         )
 
+    # Save file
     save_path = settings.upload_dir / file.filename
     with open(save_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
+    # Process pipeline
     document = load_pdf(str(save_path))
     chunks = chunk_document(
         document,
@@ -59,61 +62,52 @@ async def upload_pdf(file: UploadFile = File(...)):
         "total_pages": document.total_pages,
         "total_chunks": len(chunks),
         "embeddings_stored": stats["total_embeddings"],
-        "message": "PDF processed and stored successfully!"
+        "message": "PDF processed successfully!"
     }
 
 
 @router.post("/ask")
-async def ask_question(query: str, top_k: int = 5):
+async def ask_question(question: str, top_k: int = 5):
     """
     Ask a question about your uploaded documents.
-    Uses RAG: retrieves relevant chunks then asks Llama 3.
+    Uses the full RAG pipeline with Llama 3.
     """
-    if not query:
+    if not question:
         raise HTTPException(
             status_code=400,
             detail="Question cannot be empty!"
         )
 
-    # Check Ollama is running
     if not ollama_client.is_available():
         raise HTTPException(
             status_code=503,
-            detail="Ollama is not running! Open a terminal and run: ollama serve"
+            detail="Ollama is not running!"
         )
 
-    # Step 1 — Find relevant chunks
-    retrieved = retriever.retrieve_with_context(query, top_k=top_k)
+    result = rag_pipeline.ask(question, top_k=top_k)
+    return result
 
-    if not retrieved["chunks"]:
-        return {
-            "question": query,
-            "answer": "I couldn't find relevant information. Please upload documents first.",
-            "sources": []
-        }
 
-    # Step 2 — Build prompt for Llama 3
-    prompt = f"""You are a helpful document analyst assistant.
-Use the following context from uploaded documents to answer the question.
-Be specific and mention page numbers when relevant.
-If the answer is not in the context, say "I don't have enough information to answer this."
+@router.post("/summarize")
+async def summarize_document(filename: str):
+    """
+    Generate a summary of an uploaded document.
+    """
+    if not ollama_client.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Ollama is not running!"
+        )
 
-CONTEXT:
-{retrieved['context']}
+    file_path = settings.upload_dir / filename
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document '{filename}' not found!"
+        )
 
-QUESTION: {query}
-
-ANSWER:"""
-
-    # Step 3 — Get answer from Llama 3
-    answer = ollama_client.generate(prompt)
-
-    return {
-        "question": query,
-        "answer": answer,
-        "sources": retrieved["sources"],
-        "chunks_used": len(retrieved["chunks"])
-    }
+    result = rag_pipeline.summarize(filename)
+    return result
 
 
 @router.get("/search")
@@ -126,7 +120,6 @@ async def search(query: str, top_k: int = 5):
         )
 
     result = retriever.retrieve_with_context(query, top_k=top_k)
-
     return {
         "query": result["query"],
         "total_results": len(result["chunks"]),
